@@ -24,6 +24,28 @@ import pandas as pd
 from sklearn.metrics import f1_score
 
 
+# ---------------------------------------------------------------------- #
+# Cheap CUDA probe used to route boosters to GPU when one is visible.
+# Doesn't import torch / pycuda — just checks env + nvidia-smi.
+# Set FORCE_CPU=1 to disable the GPU path (useful for benchmarking).
+# ---------------------------------------------------------------------- #
+def _cuda_available() -> bool:
+    import os, shutil, subprocess
+    if os.environ.get("FORCE_CPU"):
+        return False
+    if "CUDA_VISIBLE_DEVICES" in os.environ and os.environ["CUDA_VISIBLE_DEVICES"] == "":
+        return False
+    if shutil.which("nvidia-smi"):
+        try:
+            r = subprocess.run(
+                ["nvidia-smi", "-L"], capture_output=True, text=True, timeout=3,
+            )
+            return r.returncode == 0 and "GPU" in r.stdout
+        except Exception:
+            return False
+    return False
+
+
 @dataclass
 class LCCDEResult:
     yt: np.ndarray
@@ -84,23 +106,56 @@ class LCCDE:
         self.classes_ = np.array(sorted(pd.Series(y_train).unique()))
         t0 = time.time()
 
-        self.lgbm = lgb.LGBMClassifier(random_state=self.seed, verbosity=-1)
-        self.lgbm.fit(X_train, y_train)
+        # ---- GPU detection: prefer CUDA if a device is visible. ----
+        use_gpu = _cuda_available()
+        device_tag = "GPU" if use_gpu else "CPU"
+        print(f"[lccde] training on {device_tag} | {len(X_train):,} rows × "
+              f"{X_train.shape[1]} cols × {len(self.classes_)} classes",
+              flush=True)
 
-        self.xgb_ = xgb.XGBClassifier(
-            random_state=self.seed,
-            verbosity=0,
-            tree_method="hist",
-            eval_metric="mlogloss",
+        # LightGBM — `device='gpu'` requires the GPU-enabled wheel; we
+        # silently fall back to CPU if the lib was built without OpenCL.
+        lgbm_kwargs = dict(random_state=self.seed, verbosity=-1)
+        if use_gpu:
+            lgbm_kwargs["device"] = "gpu"
+        try:
+            self.lgbm = lgb.LGBMClassifier(**lgbm_kwargs)
+            self.lgbm.fit(X_train, y_train)
+        except Exception as e:
+            if use_gpu:
+                print(f"[lccde]   LightGBM GPU fit failed ({e}); retrying on CPU")
+                lgbm_kwargs.pop("device", None)
+                self.lgbm = lgb.LGBMClassifier(**lgbm_kwargs)
+                self.lgbm.fit(X_train, y_train)
+            else:
+                raise
+        print(f"[lccde]   LightGBM done  ({time.time() - t0:.1f}s elapsed)", flush=True)
+        t_lgb = time.time()
+
+        xgb_kwargs = dict(
+            random_state=self.seed, verbosity=0,
+            tree_method="hist", eval_metric="mlogloss",
         )
+        if use_gpu:
+            xgb_kwargs["device"] = "cuda"
+        self.xgb_ = xgb.XGBClassifier(**xgb_kwargs)
         # XGB needs np arrays to avoid feature-name warnings on the predict path.
         self.xgb_.fit(np.asarray(X_train), np.asarray(y_train))
+        print(f"[lccde]   XGBoost  done  ({time.time() - t_lgb:.1f}s, "
+              f"{time.time() - t0:.1f}s total)", flush=True)
+        t_xgb = time.time()
 
         if _have_cat:
-            self.cat = cbt.CatBoostClassifier(
-                verbose=0, boosting_type="Plain", random_seed=self.seed
+            cat_kwargs = dict(
+                verbose=0, boosting_type="Plain", random_seed=self.seed,
             )
+            if use_gpu:
+                cat_kwargs["task_type"] = "GPU"
+                cat_kwargs["devices"] = "0"
+            self.cat = cbt.CatBoostClassifier(**cat_kwargs)
             self.cat.fit(X_train, y_train)
+            print(f"[lccde]   CatBoost done  ({time.time() - t_xgb:.1f}s, "
+                  f"{time.time() - t0:.1f}s total)", flush=True)
         else:
             # Graceful 2-booster degenerate mode (sandbox / lightweight envs).
             # In production (Colab + full deps) this branch is never taken.
