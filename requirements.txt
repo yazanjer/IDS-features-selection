@@ -1,30 +1,27 @@
-# numpy upper bound deliberately omitted: Colab's preinstalled jax,
-# opencv, rasterio, cupy, pytensor etc. all require numpy>=2.0, so any
-# upper-bound pin here triggers a cascade of dependency conflicts. Every
-# lib this project actually uses (sklearn>=1.5, scipy>=1.13, lightgbm,
-# xgboost, catboost, shap, pandas) supports numpy 2.x.
-numpy>=1.24
-# Pinned to match Colab's preinstalled google-colab 1.0.0 hard pin —
-# avoids a noisy pip resolver warning.
-pandas==2.2.2
-scipy>=1.10
-scikit-learn>=1.3
-imbalanced-learn>=0.11
+# Deliberately minimal pins. Colab ships compatible versions of
+# numpy / pandas / scipy / scikit-learn / matplotlib / seaborn / tqdm /
+# joblib already, and ANY pin we add gets pip into a resolver tangle
+# (e.g. pandas==2.2.2 caps numpy at 2.0.2 but Colab's scipy wheel was
+# built against numpy 2.1+, so scipy then fails to import with
+# "cannot import name '_center' from numpy._core.umath"). Leave Colab's
+# preinstalled versions alone and only declare what we actually need
+# installed or upgraded.
+numpy
+pandas
+scipy
+scikit-learn
+imbalanced-learn
+matplotlib
+seaborn
+tqdm
+joblib
+
+# Things Colab does NOT preinstall at the versions we need:
 lightgbm>=4.0
 xgboost>=2.0
 catboost>=1.2
 shap>=0.44
-# numba is brought in transitively by SHAP. Deliberately unpinned —
-# pinning it triggers a cascade conflict with Colab's preinstalled
-# numpy 2.x (numba<0.62 needs numpy<2.1, downgrading numpy then breaks
-# jax / opencv / rasterio / cupy / pytensor). The cleaner fix is to
-# uninstall the unused RAPIDS stack in the Colab launcher (see
-# notebooks/run_colab.ipynb cell 1) — none of our code touches it.
 lime>=0.2.0.1
-matplotlib>=3.7
-seaborn>=0.12
-tqdm>=4.65
-joblib>=1.3
 kaggle>=1.6
 kagglehub>=0.3
 river>=0.21
