@@ -17,6 +17,7 @@ a warning. Colab / full installs use the regular three-booster path.
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
+import os
 import time
 
 import numpy as np
@@ -113,22 +114,27 @@ class LCCDE:
               f"{X_train.shape[1]} cols × {len(self.classes_)} classes",
               flush=True)
 
-        # LightGBM — `device='gpu'` requires the GPU-enabled wheel; we
-        # silently fall back to CPU if the lib was built without OpenCL.
-        lgbm_kwargs = dict(random_state=self.seed, verbosity=-1)
-        if use_gpu:
+        # LightGBM stays on CPU regardless of GPU availability — its GPU
+        # path has a known abort() bug on multi-class with imbalanced rare
+        # classes ("Check failed: best_split_info.left_count > 0" from
+        # serial_tree_learner.cpp). The fatal kills the whole kernel and
+        # is not catchable from Python. CPU LightGBM is fast enough at
+        # this scale (~30 s on 400K × 78 × 15c) that losing the GPU path
+        # costs little; XGBoost + CatBoost on GPU still drive the overall
+        # 5–8× speedup.
+        # Set ENABLE_LGBM_GPU=1 to override (e.g. for benchmarking on a
+        # less-imbalanced dataset).
+        lgbm_kwargs = dict(
+            random_state=self.seed,
+            verbosity=-1,
+            # Robustness against tiny rare-class buckets after SMOTE.
+            min_data_in_leaf=20,
+            min_child_samples=20,
+        )
+        if use_gpu and os.environ.get("ENABLE_LGBM_GPU"):
             lgbm_kwargs["device"] = "gpu"
-        try:
-            self.lgbm = lgb.LGBMClassifier(**lgbm_kwargs)
-            self.lgbm.fit(X_train, y_train)
-        except Exception as e:
-            if use_gpu:
-                print(f"[lccde]   LightGBM GPU fit failed ({e}); retrying on CPU")
-                lgbm_kwargs.pop("device", None)
-                self.lgbm = lgb.LGBMClassifier(**lgbm_kwargs)
-                self.lgbm.fit(X_train, y_train)
-            else:
-                raise
+        self.lgbm = lgb.LGBMClassifier(**lgbm_kwargs)
+        self.lgbm.fit(X_train, y_train)
         print(f"[lccde]   LightGBM done  ({time.time() - t0:.1f}s elapsed)", flush=True)
         t_lgb = time.time()
 
