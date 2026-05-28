@@ -19,6 +19,7 @@ pure bi-objective accuracy + sparsity fitness, which is what the
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
+import gc
 
 import numpy as np
 import pandas as pd
@@ -26,6 +27,12 @@ from sklearn.metrics import f1_score
 
 from .config import Config
 from .lccde_model import LCCDE
+
+
+# Inside the BGWO inner loop we evaluate fitness hundreds of times. Don't
+# use the full configured SHAP background sample (which can be 200) every
+# evaluation — that explodes both memory and time. Cap it here.
+_INNER_SHAP_BG = 40
 
 
 @dataclass
@@ -87,11 +94,14 @@ class TriObjectiveFitness:
         f1_term = 1.0 - macro_f1
         size_term = float(size)
 
-        # SHAP term (skipped if gamma==0).
+        # SHAP term (skipped if gamma==0). Inside the BGWO inner loop we
+        # deliberately cap the background sample at _INNER_SHAP_BG to keep
+        # memory bounded — the final post-FS SHAP signatures use the full
+        # cfg.shap_background_samples.
         if self.cfg.gamma > 0:
             shap_term = 1.0 - _explanation_consistency(
                 model, Xva, cols, self.cfg.shap_top_k or int(mask.sum()),
-                self.cfg.shap_background_samples,
+                min(_INNER_SHAP_BG, self.cfg.shap_background_samples),
             )
         else:
             shap_term = 0.0
@@ -99,7 +109,7 @@ class TriObjectiveFitness:
         fit = (self.cfg.alpha * f1_term
                + self.cfg.beta  * size_term
                + self.cfg.gamma * shap_term)
-        return FitnessBreakdown(
+        breakdown = FitnessBreakdown(
             fitness=float(fit),
             f1_term=float(f1_term),
             size_term=float(size_term),
@@ -108,6 +118,12 @@ class TriObjectiveFitness:
             subset_size=int(mask.sum()),
             n_features=self.n_features,
         )
+        # Explicit teardown of the throwaway LCCDE — its 3 fitted boosters
+        # would otherwise survive until Python's next automatic GC pass,
+        # which in a 450-iter loop means many GB of stale state at peak.
+        del model
+        gc.collect()
+        return breakdown
 
 
 # ---------------------------------------------------------------------- #

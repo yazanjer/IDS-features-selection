@@ -77,11 +77,17 @@ def train_test_split_stratified(
 
 
 def apply_smote(
-    X_train: pd.DataFrame, y_train: pd.Series, min_count: int, seed: int
+    X_train: pd.DataFrame, y_train: pd.Series, min_count: int, seed: int,
+    max_per_class: Optional[int] = None,
 ) -> Tuple[pd.DataFrame, pd.Series]:
     """
-    Bring every class up to at least `min_count` samples via SMOTE.
-    SMOTE requires k_neighbors < class size, so we skip classes that are too small.
+    Bring every class up to at least `min_count` samples via SMOTE,
+    capped at `max_per_class` to prevent rare-class explosion (e.g.
+    CIC-IDS2017 Heartbleed has ~11 raw samples — without a cap, an
+    aggressive min_count would synthesise tens of thousands).
+
+    SMOTE requires k_neighbors < class size, so classes too small for
+    that constraint are skipped (they stay at their native count).
     """
     from imblearn.over_sampling import SMOTE
 
@@ -89,7 +95,10 @@ def apply_smote(
     target = {}
     for cls, cnt in counts.items():
         if cnt < min_count and cnt >= 2:
-            target[cls] = max(min_count, cnt)
+            t = max(min_count, cnt)
+            if max_per_class is not None:
+                t = min(t, max_per_class)
+            target[cls] = t
     if not target:
         return X_train, y_train
     # k_neighbors must be < smallest class size in the target.

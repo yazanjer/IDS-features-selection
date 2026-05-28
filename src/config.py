@@ -72,9 +72,17 @@ class Config:
     fs_test_rows: int = 10_000
 
     # ------------------------------------------------------------------ #
-    # SMOTE behaviour (mirrors the LCCDE baseline)
+    # SMOTE behaviour. Lower than the LCCDE baseline's hard-coded 1000
+    # because the baseline only oversampled two specific classes by hand;
+    # we oversample every class < threshold automatically and CIC-IDS2017
+    # has 15 classes — applying 1000 to all of them caused mid-fit OOM
+    # spikes. 500 keeps rare classes meaningful without runaway expansion.
     # ------------------------------------------------------------------ #
-    smote_min_count: int = 1_000
+    smote_min_count: int = 500
+    # Hard cap on the per-class oversample target — protects against
+    # extreme rare-class explosion (e.g. Heartbleed with 11 samples being
+    # synthesised up to 10,000 by an aggressive grid sweep).
+    smote_max_per_class: int = 2_000
 
     # ------------------------------------------------------------------ #
     # Paths

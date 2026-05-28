@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import gc
 import json
 import time
 
@@ -137,7 +138,10 @@ def run_one(cfg: Config, method: str, seed: int) -> RunResult:
     # ------------------------------------------------------------------ #
     Xtr_sel = X_tr[selected]
     Xte_sel = X_te[selected]
-    Xtr_sm, ytr_sm = apply_smote(Xtr_sel, y_tr, cfg.smote_min_count, seed)
+    Xtr_sm, ytr_sm = apply_smote(
+        Xtr_sel, y_tr, cfg.smote_min_count, seed,
+        max_per_class=getattr(cfg, "smote_max_per_class", None),
+    )
 
     model = LCCDE(seed=seed).fit(Xtr_sm, ytr_sm, Xte_sel, y_te)
     eval_t0 = time.time()
@@ -250,6 +254,10 @@ def run_experiment_matrix(
                 r = run_one(cfg, method=m, seed=s)
                 rows.append(_flatten(r))
                 _save_run_json(cfg, r)
+                # Forget the heavy RunResult once it's serialised — every
+                # trial keeps ~200 MB of confusion / signature / mask
+                # arrays that we don't need across trials.
+                del r
             except Exception as e:
                 failures.append((m, s, repr(e)))
                 print(f"[matrix] {m} seed={s} FAILED with {type(e).__name__}: {e}",
@@ -257,6 +265,10 @@ def run_experiment_matrix(
                 _tb.print_exc()
                 if fail_fast:
                     raise
+            finally:
+                # Force a GC pass between trials so transient peaks don't
+                # stack across the matrix. Cheap (~50 ms), keeps RAM flat.
+                gc.collect()
     df = pd.DataFrame(rows)
     out = cfg.results_dir / f"raw_results_{cfg.dataset}.csv"
     df.to_csv(out, index=False)

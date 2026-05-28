@@ -17,6 +17,7 @@ a warning. Colab / full installs use the regular three-booster path.
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
+import gc
 import os
 import time
 
@@ -153,11 +154,19 @@ class LCCDE:
 
         if _have_cat:
             cat_kwargs = dict(
-                verbose=0, boosting_type="Plain", random_seed=self.seed,
+                verbose=0,
+                boosting_type="Plain",
+                random_seed=self.seed,
+                # Cap CPU memory so CatBoost can't grab the whole 80GB
+                # and trigger a Colab OOM. 20 GB is plenty for our scale.
+                used_ram_limit="20gb",
             )
             if use_gpu:
                 cat_kwargs["task_type"] = "GPU"
                 cat_kwargs["devices"] = "0"
+                # Leave half the A100's 40 GB VRAM free for XGBoost and
+                # whatever else is running in the kernel.
+                cat_kwargs["gpu_ram_part"] = 0.5
             self.cat = cbt.CatBoostClassifier(**cat_kwargs)
             self.cat.fit(X_train, y_train)
             print(f"[lccde]   CatBoost done  ({time.time() - t_xgb:.1f}s, "
@@ -168,6 +177,11 @@ class LCCDE:
             self.cat = self.lgbm
             print("[lccde] catboost not installed — running 2-booster mode "
                   "(cat slot mirrors lgbm). Numbers will not match the paper.")
+
+        # Release intermediate fit-time state and trigger collection.
+        # Big multi-class boosters keep substantial scratch around until
+        # GC runs; in a 450-iteration BGWO loop that adds up fast.
+        gc.collect()
 
         self._train_time = time.time() - t0
 
