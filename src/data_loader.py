@@ -33,15 +33,27 @@ from .config import Config
 # runtime from a Colab cell: `data_loader.KAGGLE_SLUGS["cicids2017"] = [...]`
 KAGGLE_SLUGS = {
     "cicids2017": [
+        "dhoogla/distrinetcicids2017",          # ✓ verified working via kagglehub
         "chethuhn/network-intrusion-dataset",   # MachineLearningCVE 7-CSV bundle
         "dhoogla/cicids2017",                   # preprocessed variant
-        "cicdataset/cicids2017",                # legacy (may be gone)
+        "cicdataset/cicids2017",                # legacy (often returns 404)
     ],
     "unsw_nb15": [
+        "alextamboli/unsw-nb15",                # ✓ verified working via kagglehub
         "mrwellsdavid/unsw-nb15",
         "dhoogla/unswnb15",
     ],
 }
+
+# Label-column names seen across the preprocessed Kaggle variants.
+# Order matters — first match wins, so prefer canonical 'Label' over
+# 'attack_cat' (UNSW) over single-word fallbacks.
+LABEL_COLUMN_ALIASES = [
+    "Label", "label", "LABEL",
+    "attack_cat", "Attack", "attack", "attack_label", "attack_type",
+    "Class", "class",
+    "category", "Category",
+]
 
 
 # ====================================================================== #
@@ -121,16 +133,12 @@ def _load_unsw_nb15(cfg: Config) -> pd.DataFrame:
     else:
         df = _concat_csvs(cached)
 
-    # UNSW uses 'attack_cat' for the multiclass label, with NaN meaning normal.
-    if "attack_cat" in df.columns:
-        df["attack_cat"] = df["attack_cat"].fillna("Normal").astype(str).str.strip()
-        df = df.rename(columns={"attack_cat": "Label"})
-        if "label" in df.columns:
-            df = df.drop(columns=["label"])
-        if "id" in df.columns:
-            df = df.drop(columns=["id"])
-    elif "Label" not in df.columns:
-        raise ValueError("UNSW-NB15 CSV missing both 'attack_cat' and 'Label' columns.")
+    # Drop the row-id column if the dataset variant carries one — it's a
+    # sample index, not a feature.
+    if "id" in df.columns:
+        df = df.drop(columns=["id"])
+    # Label-column normalisation (attack_cat → Label, NaN → 'Normal') is
+    # now handled centrally in _clean()/_find_label_column().
     return df
 
 
@@ -264,9 +272,30 @@ def _kaggle_download_first_working(
 
 
 def _clean(df: pd.DataFrame) -> pd.DataFrame:
-    """Strip whitespace from column names, drop dupes, drop inf/NaN rows."""
+    """Strip whitespace from column names, normalise the label column,
+    drop dupes, drop inf/NaN rows."""
     df = df.copy()
     df.columns = [c.strip() for c in df.columns]
+
+    # Normalise the label column to 'Label' regardless of which alias the
+    # preprocessed dataset variant happened to use.
+    label_col = _find_label_column(df)
+    if label_col is None:
+        raise ValueError(
+            f"Could not find a label column in the dataset. "
+            f"Looked for any of: {LABEL_COLUMN_ALIASES}. "
+            f"Available columns: {list(df.columns)[:25]}..."
+        )
+    if label_col != "Label":
+        # UNSW's attack_cat uses NaN to mean 'normal' — preserve that mapping.
+        if label_col == "attack_cat":
+            df[label_col] = df[label_col].fillna("Normal")
+        # If both the alias and a separate 'label' col exist (UNSW), drop the
+        # numeric binary 'label' to avoid double-keep.
+        if "label" in df.columns and label_col != "label":
+            df = df.drop(columns=["label"])
+        df = df.rename(columns={label_col: "Label"})
+
     # Drop columns that are entirely null (some CIC files have stray ones)
     df = df.dropna(axis=1, how="all")
     # Coerce object columns that should be numeric (CIC has " " values)
@@ -279,6 +308,17 @@ def _clean(df: pd.DataFrame) -> pd.DataFrame:
     df = df.dropna()
     df = df.drop_duplicates().reset_index(drop=True)
     return df
+
+
+def _find_label_column(df: pd.DataFrame) -> Optional[str]:
+    """Return the first matching label-column alias actually present in df."""
+    cols_lower = {c.lower(): c for c in df.columns}
+    for alias in LABEL_COLUMN_ALIASES:
+        if alias in df.columns:
+            return alias
+        if alias.lower() in cols_lower:
+            return cols_lower[alias.lower()]
+    return None
 
 
 def _split_xy(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series, dict]:
