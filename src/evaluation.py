@@ -152,16 +152,18 @@ def run_one(cfg: Config, method: str, seed: int) -> RunResult:
     metrics = _compute_metrics(y_te, y_pred, model, Xte_sel)
 
     # SHAP signatures + fidelity for explainability reporting.
+    # Skipped by default — see Config.compute_shap_in_matrix.
     shap_sig = None
     fidelity = None
-    try:
-        sig = compute_shap_signatures(model, Xte_sel.sample(
-            min(500, len(Xte_sel)), random_state=seed
-        ), background_n=cfg.shap_background_samples)
-        shap_sig = {int(c): sig.top_k_for_class(c, k=5) for c in sig.classes}
-        fidelity = explanation_fidelity(model, Xte_sel, sig, top_k=10)
-    except Exception as e:
-        print(f"[run] SHAP signatures skipped: {e}")
+    if getattr(cfg, "compute_shap_in_matrix", False):
+        try:
+            sig = compute_shap_signatures(model, Xte_sel.sample(
+                min(500, len(Xte_sel)), random_state=seed
+            ), background_n=cfg.shap_background_samples)
+            shap_sig = {int(c): sig.top_k_for_class(c, k=5) for c in sig.classes}
+            fidelity = explanation_fidelity(model, Xte_sel, sig, top_k=10)
+        except Exception as e:
+            print(f"[run] SHAP signatures skipped: {e}")
 
     return RunResult(
         method=method, dataset=cfg.dataset, seed=seed,

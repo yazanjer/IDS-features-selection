@@ -62,7 +62,16 @@ class Config:
 
     # SHAP top-k overlap window used inside explanation_consistency.
     shap_top_k: Optional[int] = None       # None -> use |S| (the subset size itself)
-    shap_background_samples: int = 200     # for SHAP TreeExplainer background
+    shap_background_samples: int = 100     # for SHAP TreeExplainer background
+
+    # Skip SHAP signatures + fidelity inside run_one(). SHAP TreeExplainer's
+    # C extension has a heap-corruption bug on multi-class CatBoost trees
+    # (malloc() unaligned tcache abort) — set False by default and compute
+    # signatures once after the matrix on the winning subset via
+    # `explainability.compute_shap_signatures()` directly. The fitness loop
+    # still uses SHAP (with a smaller background), only the post-fit
+    # per-class signatures and fidelity are gated.
+    compute_shap_in_matrix: bool = False
 
     # ------------------------------------------------------------------ #
     # Inner-loop training budget for the FS search (must be cheap).

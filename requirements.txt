@@ -1,5 +1,8 @@
 numpy>=1.24,<2.1
-pandas>=2.0
+# Pinned to match Colab's preinstalled google-colab 1.0.0 hard pin — avoids
+# a noisy pip resolver warning and removes one moving part if SHAP's C
+# extension turns out to be ABI-sensitive to the pandas version.
+pandas==2.2.2
 scipy>=1.10
 scikit-learn>=1.3
 imbalanced-learn>=0.11
