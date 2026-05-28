@@ -27,10 +27,20 @@ import pandas as pd
 from .config import Config
 
 
-# Canonical Kaggle dataset slugs.
+# Kaggle dataset slugs to try, in priority order. Kaggle datasets get
+# renamed/removed periodically, so we try each in turn and use the first
+# one that downloads at least one CSV. You can monkey-patch this list at
+# runtime from a Colab cell: `data_loader.KAGGLE_SLUGS["cicids2017"] = [...]`
 KAGGLE_SLUGS = {
-    "cicids2017": "cicdataset/cicids2017",
-    "unsw_nb15":  "mrwellsdavid/unsw-nb15",
+    "cicids2017": [
+        "chethuhn/network-intrusion-dataset",   # MachineLearningCVE 7-CSV bundle
+        "dhoogla/cicids2017",                   # preprocessed variant
+        "cicdataset/cicids2017",                # legacy (may be gone)
+    ],
+    "unsw_nb15": [
+        "mrwellsdavid/unsw-nb15",
+        "dhoogla/unswnb15",
+    ],
 }
 
 
@@ -77,12 +87,15 @@ def _load_cicids2017(cfg: Config) -> pd.DataFrame:
             print(f"[data] reading {len(cached)} cached CIC-IDS2017 CSV(s)")
         return _concat_csvs(cached)
 
-    # 3. Kaggle download
-    _kaggle_download(KAGGLE_SLUGS["cicids2017"], cache_dir, cfg.verbose)
+    # 3. Kaggle download — try each candidate slug in turn.
+    _kaggle_download_first_working(KAGGLE_SLUGS["cicids2017"], cache_dir, cfg.verbose)
     cached = sorted(glob.glob(str(cache_dir / "**/*.csv"), recursive=True))
     if not cached:
         raise FileNotFoundError(
-            "Could not locate CIC-IDS2017 CSVs after Kaggle download."
+            "Could not locate CIC-IDS2017 CSVs after Kaggle download. "
+            "Verify access at https://www.kaggle.com/ — open each slug in "
+            f"{KAGGLE_SLUGS['cicids2017']} and click Download once to accept "
+            "any terms-of-use prompt."
         )
     return _concat_csvs(cached)
 
@@ -94,8 +107,11 @@ def _load_unsw_nb15(cfg: Config) -> pd.DataFrame:
     # UNSW-NB15 ships with a pre-split train/test on Kaggle.
     cached = sorted(glob.glob(str(cache_dir / "**/UNSW_NB15_*.csv"), recursive=True))
     if not cached:
-        _kaggle_download(KAGGLE_SLUGS["unsw_nb15"], cache_dir, cfg.verbose)
+        _kaggle_download_first_working(KAGGLE_SLUGS["unsw_nb15"], cache_dir, cfg.verbose)
         cached = sorted(glob.glob(str(cache_dir / "**/UNSW_NB15_*.csv"), recursive=True))
+        # Some UNSW slugs ship CSVs without the UNSW_NB15_ prefix.
+        if not cached:
+            cached = sorted(glob.glob(str(cache_dir / "**/*.csv"), recursive=True))
 
     # Prefer the canonical training_set + testing_set if present.
     train = [p for p in cached if "training-set" in p.lower() or "training_set" in p.lower()]
@@ -132,25 +148,119 @@ def _concat_csvs(paths) -> pd.DataFrame:
 
 
 def _kaggle_download(slug: str, target_dir: Path, verbose: bool) -> None:
-    """Run `kaggle datasets download -d <slug> -p target_dir --unzip`."""
+    """Run `kaggle datasets download -d <slug> -p target_dir --unzip`.
+
+    No --quiet: kaggle's stderr is the only way to learn that a slug was
+    renamed, requires terms acceptance, or that the dataset is private.
+    """
     if verbose:
         print(f"[data] downloading {slug} from Kaggle into {target_dir} ...")
     cmd = ["kaggle", "datasets", "download", "-d", slug,
-           "-p", str(target_dir), "--unzip", "--quiet"]
+           "-p", str(target_dir), "--unzip"]
     try:
-        subprocess.run(cmd, check=True)
+        proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        if verbose and proc.stdout:
+            print(proc.stdout)
     except FileNotFoundError as e:
         raise RuntimeError(
             "Kaggle CLI not installed. Run `pip install kaggle` and place "
             "kaggle.json in ~/.kaggle/."
         ) from e
     except subprocess.CalledProcessError as e:
-        # Some Kaggle datasets ship as a zip the CLI doesn't auto-extract.
+        # Fall through: some datasets ship as a zip the CLI doesn't auto-extract.
         for zp in target_dir.glob("*.zip"):
             with zipfile.ZipFile(zp) as zf:
                 zf.extractall(target_dir)
         if not list(target_dir.glob("**/*.csv")):
-            raise RuntimeError(f"Kaggle download failed for {slug}: {e}") from e
+            err = (e.stderr or "").strip() or (e.stdout or "").strip() or str(e)
+            raise RuntimeError(
+                f"Kaggle download failed for {slug}.\n"
+                f"  exit_code={e.returncode}\n"
+                f"  kaggle CLI said: {err}"
+            ) from e
+
+
+def _kagglehub_download(slug: str, target_dir: Path, verbose: bool) -> bool:
+    """
+    Preferred download path: uses the `kagglehub` package, which handles
+    auth automatically (no need for ~/.kaggle/kaggle.json in Colab) and
+    caches to ~/.cache/kagglehub/. Returns True if at least one CSV
+    landed in `target_dir`, False if kagglehub isn't installed or the
+    dataset returned no CSVs.
+    """
+    try:
+        import kagglehub
+    except ImportError:
+        return False
+    if verbose:
+        print(f"[data] kagglehub: downloading {slug} ...")
+    try:
+        cached_path = Path(kagglehub.dataset_download(slug))
+    except Exception as e:
+        if verbose:
+            print(f"[data] kagglehub failed for {slug}: {type(e).__name__}: {e}")
+        return False
+    csvs = sorted(cached_path.glob("**/*.csv"))
+    if not csvs:
+        if verbose:
+            print(f"[data] kagglehub: {slug} downloaded but contains no CSVs")
+        return False
+    # Mirror the kagglehub cache structure into target_dir via symlinks
+    # (or copies if the filesystem doesn't allow symlinks).
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for csv in csvs:
+        rel = csv.relative_to(cached_path)
+        dest = target_dir / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if not dest.exists():
+            try:
+                dest.symlink_to(csv)
+            except OSError:
+                import shutil
+                shutil.copy2(csv, dest)
+    if verbose:
+        print(f"[data] kagglehub: {len(csvs)} CSV(s) staged into {target_dir}")
+    return True
+
+
+def _kaggle_download_first_working(
+    slugs, target_dir: Path, verbose: bool
+) -> str:
+    """
+    Try each slug in `slugs` (str or list). For each slug, attempt
+    `kagglehub` first (no auth file needed, more reliable), then fall
+    back to the `kaggle` CLI. Return the first slug that puts ≥1 CSV
+    in target_dir. Aggregate every failure so the user sees them all.
+    """
+    if isinstance(slugs, str):
+        slugs = [slugs]
+    errors = []
+    for slug in slugs:
+        # 1. kagglehub
+        if _kagglehub_download(slug, target_dir, verbose):
+            if verbose:
+                print(f"[data] success with slug: {slug} (kagglehub)")
+            return slug
+        # 2. kaggle CLI fallback
+        try:
+            _kaggle_download(slug, target_dir, verbose)
+            if list(target_dir.glob("**/*.csv")):
+                if verbose:
+                    print(f"[data] success with slug: {slug} (kaggle CLI)")
+                return slug
+            errors.append(f"{slug}: kaggle CLI succeeded but no CSVs found")
+        except RuntimeError as e:
+            errors.append(str(e))
+            continue
+    raise RuntimeError(
+        "All Kaggle slug candidates failed:\n  - "
+        + "\n  - ".join(errors)
+        + "\nFix options:\n"
+          "  - Install kagglehub:   pip install kagglehub\n"
+          "  - Or accept terms-of-use on the dataset's Kaggle page in a browser\n"
+          "  - Or pin a working slug:\n"
+          "      data_loader.KAGGLE_SLUGS['cicids2017'] = ['your/working-slug']"
+    )
 
 
 def _clean(df: pd.DataFrame) -> pd.DataFrame:
