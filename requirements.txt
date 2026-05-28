@@ -14,6 +14,11 @@ lightgbm>=4.0
 xgboost>=2.0
 catboost>=1.2
 shap>=0.44
+# numba is a SHAP dependency. Pin to the band cudf-cu12 / cuml-cu12 also
+# require so Colab's pip dep-resolver stops emitting a "WARNING: pip's
+# dependency resolver does not currently take into account..." line
+# every install. 0.60-0.61 is fully compatible with shap>=0.44.
+numba>=0.60,<0.62
 lime>=0.2.0.1
 matplotlib>=3.7
 seaborn>=0.12
