@@ -1,7 +1,11 @@
-numpy>=1.24,<2.1
-# Pinned to match Colab's preinstalled google-colab 1.0.0 hard pin — avoids
-# a noisy pip resolver warning and removes one moving part if SHAP's C
-# extension turns out to be ABI-sensitive to the pandas version.
+# numpy upper bound deliberately omitted: Colab's preinstalled jax,
+# opencv, rasterio, cupy, pytensor etc. all require numpy>=2.0, so any
+# upper-bound pin here triggers a cascade of dependency conflicts. Every
+# lib this project actually uses (sklearn>=1.5, scipy>=1.13, lightgbm,
+# xgboost, catboost, shap, pandas) supports numpy 2.x.
+numpy>=1.24
+# Pinned to match Colab's preinstalled google-colab 1.0.0 hard pin —
+# avoids a noisy pip resolver warning.
 pandas==2.2.2
 scipy>=1.10
 scikit-learn>=1.3
