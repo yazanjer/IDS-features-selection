@@ -2,10 +2,8 @@
 
 **Metaheuristic feature selection + SHAP-in-the-loop explainability for the LCCDE intrusion-detection ensemble.**
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/USER/ids-bgwo-shap/blob/main/notebooks/run_colab.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/yazanjer/IDS-features-selection/blob/main/notebooks/run_colab.ipynb)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-
-> Replace `USER` in the Colab badge with your GitHub username after pushing.
 
 ## What this project is
 
@@ -104,7 +102,7 @@ ids-bgwo-shap/
 ## Quickstart — local
 
 ```bash
-git clone https://github.com/USER/ids-bgwo-shap.git
+git clone https://github.com/yazanjer/IDS-features-selection.git
 cd ids-bgwo-shap
 
 python -m venv .venv
