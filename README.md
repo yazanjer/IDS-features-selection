@@ -65,6 +65,7 @@ ids-bgwo-shap/
 │   ├── sampling.py        # stratified down-sampling, SMOTE rebalance
 │   ├── lccde_model.py     # leader-class confidence decision ensemble
 │   ├── bgwo_fs.py         # BGWO + filter baseline
+│   ├── fs_baselines.py    # RFE, LASSO, RF-importance, in-house Boruta
 │   ├── fitness.py         # tri-objective fitness w/ SHAP coherence
 │   ├── explainability.py  # SHAP signatures, LIME, Kuncheva stability, fidelity
 │   ├── evaluation.py      # multi-seed runner + Wilcoxon
@@ -131,7 +132,7 @@ Every knob lives in one dataclass. Key fields:
 | `dataset`             | `cicids2017` | `cicids2017` or `unsw_nb15`                              |
 | `sample_size`         | `200_000`    | Stratified-sample target after load                      |
 | `n_seeds`             | `10`         | Multi-seed runs for mean ± std + Wilcoxon                |
-| `fs_method`           | `bgwo_shap`  | `none`, `filter`, `bgwo_bi`, `bgwo_shap`                 |
+| `fs_method`           | `bgwo_shap`  | `none`, `filter`, `rfe`, `lasso`, `rf_imp`, `boruta`, `bgwo_bi`, `bgwo_shap` |
 | `bgwo_population`     | `10`         | BGWO pack size                                           |
 | `bgwo_iterations`     | `20`         | BGWO iteration budget                                    |
 | `alpha`, `beta`, `gamma` | `0.85`, `0.10`, `0.05` | Fitness weights                                |
@@ -145,8 +146,12 @@ Every knob lives in one dataclass. Key fields:
 * **Baselines (LCCDE downstream fixed in all cases):**
   1. `none` — full 77-feature set, no FS
   2. `filter` — information-gain ranking (mirrors the original repo)
-  3. `bgwo_bi` — BGWO with `γ = 0` (bi-objective, SHAP-term ablated)
-  4. `bgwo_shap` — full tri-objective BGWO
+  3. `rfe` — Recursive Feature Elimination wrapping LightGBM (`src/fs_baselines.py`)
+  4. `lasso` — L1-penalised multinomial logistic regression
+  5. `rf_imp` — Random-Forest impurity-importance top-k
+  6. `boruta` — in-house Boruta (shadow-feature permutation test on RF importances; no extra dependency)
+  7. `bgwo_bi` — BGWO with `γ = 0` (bi-objective, SHAP-term ablated)
+  8. `bgwo_shap` — full tri-objective BGWO (proposed)
 * **Metrics per seed:** accuracy, macro/weighted precision/recall/F1,
   per-class P/R/F1 (rare classes flagged), ROC-AUC (OvR), PR-AUC,
   confusion matrix, number of selected features, **inference latency

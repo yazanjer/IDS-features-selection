@@ -37,6 +37,7 @@ from .sampling import stratified_sample, train_test_split_stratified, apply_smot
 from .lccde_model import LCCDE
 from .bgwo_fs import BinaryGreyWolfOptimizer, filter_fs, all_features, BGWOResult
 from .fitness import TriObjectiveFitness
+from .fs_baselines import WRAPPER_METHODS, run_wrapper_method
 from .explainability import (
     compute_shap_signatures, ShapSignatures, explanation_fidelity,
     variable_stability, kuncheva_index, jaccard, cross_dataset_overlap,
@@ -98,6 +99,14 @@ def run_one(cfg: Config, method: str, seed: int) -> RunResult:
         selected = all_features(X_tr, y_tr)
     elif method == "filter":
         selected = filter_fs(X_tr, y_tr)
+    elif method in WRAPPER_METHODS:
+        # Modern wrapper baselines (RFE, LASSO, RF-importance, Boruta)
+        # use the inner-loop subset for speed; matches what BGWO sees.
+        X_fs_tr = X_tr.head(cfg.fs_train_rows)
+        y_fs_tr = y_tr.head(cfg.fs_train_rows)
+        selected = run_wrapper_method(method, X_fs_tr, y_fs_tr, seed)
+        if not selected:
+            selected = all_features(X_tr, y_tr)
     elif method in ("bgwo_bi", "bgwo_shap"):
         # Cheap inner-loop training subset for the FS search.
         X_fs_tr = X_tr.head(cfg.fs_train_rows)
@@ -210,9 +219,16 @@ def _compute_metrics(y_te, y_pred, model: LCCDE, Xte_sel) -> dict:
 # ====================================================================== #
 # Multi-seed driver + Wilcoxon
 # ====================================================================== #
+DEFAULT_METHODS = (
+    "none", "filter",
+    "rfe", "lasso", "rf_imp", "boruta",   # modern wrapper baselines
+    "bgwo_bi", "bgwo_shap",
+)
+
+
 def run_experiment_matrix(
     cfg: Config,
-    methods: List[str] = ("none", "filter", "bgwo_bi", "bgwo_shap"),
+    methods: List[str] = DEFAULT_METHODS,
     seeds: Optional[List[int]] = None,
 ) -> pd.DataFrame:
     seeds = seeds if seeds is not None else list(range(cfg.n_seeds))
