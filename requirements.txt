@@ -14,11 +14,12 @@ lightgbm>=4.0
 xgboost>=2.0
 catboost>=1.2
 shap>=0.44
-# numba is a SHAP dependency. Pin to the band cudf-cu12 / cuml-cu12 also
-# require so Colab's pip dep-resolver stops emitting a "WARNING: pip's
-# dependency resolver does not currently take into account..." line
-# every install. 0.60-0.61 is fully compatible with shap>=0.44.
-numba>=0.60,<0.62
+# numba is brought in transitively by SHAP. Deliberately unpinned —
+# pinning it triggers a cascade conflict with Colab's preinstalled
+# numpy 2.x (numba<0.62 needs numpy<2.1, downgrading numpy then breaks
+# jax / opencv / rasterio / cupy / pytensor). The cleaner fix is to
+# uninstall the unused RAPIDS stack in the Colab launcher (see
+# notebooks/run_colab.ipynb cell 1) — none of our code touches it.
 lime>=0.2.0.1
 matplotlib>=3.7
 seaborn>=0.12
