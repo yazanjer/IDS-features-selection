@@ -1,0 +1,44 @@
+# Secrets / credentials
+kaggle.json
+.env
+*.pem
+github_token*
+*_token.txt
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Datasets (too large for git)
+datasets/
+data/raw/
+data/processed/
+*.csv
+*.parquet
+!tests/fixtures/*.csv
+
+# Results (generated)
+results/
+*.png
+*.pdf
+*.svg
+!notebooks/*.png
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
