@@ -57,16 +57,45 @@ LABEL_COLUMN_ALIASES = [
 
 
 # ====================================================================== #
+# In-process cache for the cleaned dataset.
+#
+# Multi-seed experiment matrices call load_dataset() up to 80 times per
+# session (8 methods × 10 seeds). The expensive parts — Kaggle download,
+# 8-CSV concat, NaN/inf cleaning, dedup — produce the same result every
+# call as long as (dataset, local_csv) doesn't change. Cache that once
+# so trials 2..N pay zero load cost.
+#
+# Call data_loader.clear_dataset_cache() to force a fresh reload (e.g.
+# after switching the dataset slug in a Colab cell).
+# ====================================================================== #
+_DATASET_CACHE: dict = {}
+
+
+def clear_dataset_cache() -> None:
+    """Drop the in-process dataset cache. Useful after slug overrides."""
+    _DATASET_CACHE.clear()
+
+
+# ====================================================================== #
 # Public entry point
 # ====================================================================== #
 def load_dataset(cfg: Config) -> Tuple[pd.DataFrame, pd.Series, list, dict]:
     """
     Returns (X, y, feature_names, label_mapping) for the configured dataset.
-    Tries (in order):
-      1. cfg.local_cicids_csv (or local_unsw_csv) if set and present
-      2. cfg.datasets_dir cache
-      3. Kaggle API download into cfg.datasets_dir
+    Cached in-process, keyed by (dataset name, local_csv path) — subsequent
+    calls in the same Python session are free.
+
+    Source resolution order:
+      1. cfg.local_cicids_csv if set and present (smoke tests, dev)
+      2. cfg.datasets_dir cache (CSVs from a previous Kaggle download)
+      3. Kaggle download via kagglehub (preferred) or kaggle CLI (fallback)
     """
+    cache_key = (cfg.dataset, str(cfg.local_cicids_csv) if cfg.local_cicids_csv else None)
+    if cache_key in _DATASET_CACHE:
+        if cfg.verbose:
+            print(f"[data] cache hit for {cfg.dataset} — reusing cleaned dataframe")
+        return _DATASET_CACHE[cache_key]
+
     cfg.ensure_dirs()
     if cfg.dataset == "cicids2017":
         df = _load_cicids2017(cfg)
@@ -77,7 +106,9 @@ def load_dataset(cfg: Config) -> Tuple[pd.DataFrame, pd.Series, list, dict]:
 
     df = _clean(df)
     X, y, label_map = _split_xy(df)
-    return X, y, list(X.columns), label_map
+    result = (X, y, list(X.columns), label_map)
+    _DATASET_CACHE[cache_key] = result
+    return result
 
 
 # ====================================================================== #
