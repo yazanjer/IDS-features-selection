@@ -230,26 +230,58 @@ def run_experiment_matrix(
     cfg: Config,
     methods: List[str] = DEFAULT_METHODS,
     seeds: Optional[List[int]] = None,
+    fail_fast: bool = False,
 ) -> pd.DataFrame:
+    """Run the (method × seed) experiment grid.
+
+    fail_fast=True re-raises the first exception (useful for debugging in
+    Colab); default behaviour keeps going and prints full tracebacks so
+    silent multi-failure can't hide downstream errors like the empty-df
+    KeyError that aggregate() throws."""
+    import traceback as _tb
+
     seeds = seeds if seeds is not None else list(range(cfg.n_seeds))
     rows = []
+    failures = []
     for m in methods:
         for s in seeds:
-            print(f"\n========== {m} | seed={s} ==========")
+            print(f"\n========== {m} | seed={s} ==========", flush=True)
             try:
                 r = run_one(cfg, method=m, seed=s)
                 rows.append(_flatten(r))
                 _save_run_json(cfg, r)
             except Exception as e:
-                print(f"[matrix] {m} seed={s} failed: {e}")
+                failures.append((m, s, repr(e)))
+                print(f"[matrix] {m} seed={s} FAILED with {type(e).__name__}: {e}",
+                      flush=True)
+                _tb.print_exc()
+                if fail_fast:
+                    raise
     df = pd.DataFrame(rows)
     out = cfg.results_dir / f"raw_results_{cfg.dataset}.csv"
     df.to_csv(out, index=False)
     print(f"[matrix] raw results saved to {out}")
+    if failures:
+        print(f"\n[matrix] {len(failures)}/{len(methods)*len(seeds)} trials failed:")
+        for m, s, err in failures:
+            print(f"    - {m} seed={s}: {err}")
+    if df.empty:
+        raise RuntimeError(
+            "run_experiment_matrix produced an empty DataFrame — every trial "
+            "failed. See the [matrix] FAILED lines above for the root cause; "
+            "re-run with fail_fast=True to surface the first traceback directly."
+        )
     return df
 
 
 def aggregate(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "method" not in df.columns:
+        raise ValueError(
+            "aggregate(df) was called on an empty / methodless DataFrame. "
+            "This usually means every trial in run_experiment_matrix failed — "
+            "scroll up for the [matrix] FAILED tracebacks, or re-run the "
+            "matrix with fail_fast=True."
+        )
     metric_cols = [
         "accuracy", "macro_f1", "weighted_f1",
         "macro_precision", "macro_recall",
