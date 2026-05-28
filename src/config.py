@@ -18,27 +18,34 @@ DATASETS_DIR = REPO_ROOT / "datasets"
 class Config:
     # ------------------------------------------------------------------ #
     # Dataset selection
+    #
+    # The defaults below are *paper-grade* — they are the values used to
+    # produce the headline results in the README's comparison table. They
+    # assume a Colab Pro+ A100 (or equivalent) and ~80 GB RAM. For a
+    # quick smoke run on a laptop, use Config(sample_size=50_000,
+    # n_seeds=2, bgwo_population=6, bgwo_iterations=10) or call
+    # `smoke_config()` directly.
     # ------------------------------------------------------------------ #
     dataset: str = "cicids2017"            # {"cicids2017", "unsw_nb15"}
-    sample_size: int = 200_000             # stratified sample after load
+    sample_size: int = 500_000             # stratified sample after load
     test_size: float = 0.2
 
     # ------------------------------------------------------------------ #
     # Reproducibility
     # ------------------------------------------------------------------ #
     seed: int = 0
-    n_seeds: int = 10                      # for the multi-seed evaluation loop
+    n_seeds: int = 10                      # multi-seed mean ± std + Wilcoxon
 
     # ------------------------------------------------------------------ #
     # Feature selection method (controls the FS branch of the pipeline)
     # ------------------------------------------------------------------ #
-    fs_method: str = "bgwo_shap"           # {"none", "filter", "bgwo_bi", "bgwo_shap"}
+    fs_method: str = "bgwo_shap"           # see evaluation.DEFAULT_METHODS for the full set
 
     # ------------------------------------------------------------------ #
     # BGWO hyperparameters
     # ------------------------------------------------------------------ #
-    bgwo_population: int = 10
-    bgwo_iterations: int = 20
+    bgwo_population: int = 15              # pack size
+    bgwo_iterations: int = 30              # convergence budget
     bgwo_transfer: str = "s_shape"         # {"s_shape", "v_shape"} sigmoid family
     bgwo_init_density: float = 0.5         # initial fraction of features turned on
 
@@ -55,14 +62,14 @@ class Config:
 
     # SHAP top-k overlap window used inside explanation_consistency.
     shap_top_k: Optional[int] = None       # None -> use |S| (the subset size itself)
-    shap_background_samples: int = 100     # for SHAP TreeExplainer background
+    shap_background_samples: int = 200     # for SHAP TreeExplainer background
 
     # ------------------------------------------------------------------ #
     # Inner-loop training budget for the FS search (must be cheap).
     # The *final* fit on the chosen subset uses full sample_size.
     # ------------------------------------------------------------------ #
-    fs_train_rows: int = 15_000
-    fs_test_rows: int = 5_000
+    fs_train_rows: int = 30_000
+    fs_test_rows: int = 10_000
 
     # ------------------------------------------------------------------ #
     # SMOTE behaviour (mirrors the LCCDE baseline)

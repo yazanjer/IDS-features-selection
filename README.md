@@ -125,17 +125,22 @@ python -c "from src.evaluation import run_experiment_matrix, aggregate; \
 
 Every knob lives in one dataclass. Key fields:
 
+Defaults are **paper-grade** — `Config()` with no arguments reproduces the
+headline result. For a quick local smoke run, use `smoke_config()` instead
+or override the heavy fields explicitly.
+
 | Field                 | Default      | Meaning                                                  |
 |-----------------------|--------------|----------------------------------------------------------|
 | `dataset`             | `cicids2017` | `cicids2017` or `unsw_nb15`                              |
-| `sample_size`         | `200_000`    | Stratified-sample target after load                      |
+| `sample_size`         | `500_000`    | Stratified-sample target after load                      |
 | `n_seeds`             | `10`         | Multi-seed runs for mean ± std + Wilcoxon                |
 | `fs_method`           | `bgwo_shap`  | `none`, `filter`, `rfe`, `lasso`, `rf_imp`, `boruta`, `bgwo_bi`, `bgwo_shap` |
-| `bgwo_population`     | `10`         | BGWO pack size                                           |
-| `bgwo_iterations`     | `20`         | BGWO iteration budget                                    |
+| `bgwo_population`     | `15`         | BGWO pack size                                           |
+| `bgwo_iterations`     | `30`         | BGWO iteration budget                                    |
 | `alpha`, `beta`, `gamma` | `0.85`, `0.10`, `0.05` | Fitness weights                                |
-| `fs_train_rows`       | `15_000`     | Inner-loop training subset for the FS search             |
-| `fs_test_rows`        | `5_000`      | Inner-loop validation subset for the FS search           |
+| `fs_train_rows`       | `30_000`     | Inner-loop training subset for the FS search             |
+| `fs_test_rows`        | `10_000`     | Inner-loop validation subset for the FS search           |
+| `shap_background_samples` | `200`    | Background sample size for SHAP TreeExplainer            |
 
 `Config` also exposes a `smoke_config()` factory used by `tests/smoke_test.py`.
 
@@ -189,13 +194,17 @@ the full three-booster LCCDE and the defaults in the table above.
 
 ## Compute reality check
 
-BGWO retrains LCCDE `population × iterations` times. With the defaults
-(pop 10, iter 20) that is ~200 LCCDE fits on the inner-loop subset
-(15K train / 5K val rows), or roughly 30–60 minutes on a Colab free-tier
-T4 per `bgwo_shap` run per seed. Use sampled subsets for the FS search
-and only evaluate the final mask on the full sample. The notebook
-defaults are conservative; tighten or relax `fs_train_rows` /
-`fs_test_rows` / `bgwo_population` / `bgwo_iterations` to taste.
+BGWO retrains LCCDE `population × iterations` times. With the paper-grade
+defaults (pop 15, iter 30) that is **450 LCCDE fits** per BGWO trial on
+the inner-loop subset (30K train / 10K val rows), times 10 seeds, times
+the two BGWO branches — ≈9,000 inner fits total. On a Colab Pro+ A100
+the full 8-method × 10-seed matrix runs in roughly **6–10 hours** end
+to end. On a free-tier T4 it's roughly 3× longer; reduce to
+`n_seeds=3, bgwo_iterations=15` for a same-shape result in ~1 hour.
+
+For a developer smoke run, `smoke_config()` returns a tiny preset
+(3K rows, pop 3, iter 2, 1 seed) that exercises every code path in
+under a minute.
 
 ## Citations
 
