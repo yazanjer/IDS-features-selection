@@ -6,7 +6,14 @@
 # "cannot import name '_center' from numpy._core.umath"). Leave Colab's
 # preinstalled versions alone and only declare what we actually need
 # installed or upgraded.
-numpy
+#
+# numpy>=2.2 floor: Colab 2026.04 ships numpy 2.0.2 BUT its base image has
+# a partially-updated numpy/testing/_private/utils.py that calls
+# np._core._multiarray_umath._blas_supports_fpe — a symbol added in
+# numpy 2.2.0. sklearn imports numpy.testing transitively, so the import
+# crashes with AttributeError unless numpy is upgraded to >=2.2. Lower
+# bound only — no upper bound, no exact pin — per the v3 rule.
+numpy>=2.2
 pandas
 scipy
 scikit-learn
