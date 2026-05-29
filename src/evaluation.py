@@ -101,19 +101,34 @@ def run_one(cfg: Config, method: str, seed: int) -> RunResult:
     elif method == "filter":
         selected = filter_fs(X_tr, y_tr)
     elif method in WRAPPER_METHODS:
-        # Modern wrapper baselines (RFE, LASSO, RF-importance, Boruta)
-        # use the inner-loop subset for speed; matches what BGWO sees.
-        X_fs_tr = X_tr.head(cfg.fs_train_rows)
-        y_fs_tr = y_tr.head(cfg.fs_train_rows)
+        # Modern wrapper baselines (RFE, LASSO, RF-importance, Boruta) use
+        # the inner-loop subset for speed; matches what BGWO sees.
+        # Stratified subsample (not .head()) so rare classes don't drop
+        # out of the FS training set — an unstratified slice left rfe /
+        # boruta with random class composition per seed and produced
+        # 0.24–0.31 macro_F1 std across seeds.
+        X_fs_tr, y_fs_tr = stratified_sample(
+            X_tr, y_tr, n=cfg.fs_train_rows, seed=seed,
+            min_per_class=1, verbose=False,
+        )
         selected = run_wrapper_method(method, X_fs_tr, y_fs_tr, seed)
         if not selected:
             selected = all_features(X_tr, y_tr)
     elif method in ("bgwo_bi", "bgwo_shap"):
-        # Cheap inner-loop training subset for the FS search.
-        X_fs_tr = X_tr.head(cfg.fs_train_rows)
-        y_fs_tr = y_tr.head(cfg.fs_train_rows)
-        X_fs_va = X_te.head(cfg.fs_test_rows)
-        y_fs_va = y_te.head(cfg.fs_test_rows)
+        # Cheap inner-loop training / validation subsets for the FS search.
+        # Stratified so XGBoost sees contiguous class labels — without
+        # this, rare classes (CIC-IDS2017 Heartbleed has ~6 train rows
+        # in a 500K stratified sample) drop from the .head() slice and
+        # XGBoost 3.x rejects the non-contiguous label set before training,
+        # crashing every BGWO trial. See DIAGNOSTIC_RUN_REDUCED.md §CRIT-2.
+        X_fs_tr, y_fs_tr = stratified_sample(
+            X_tr, y_tr, n=cfg.fs_train_rows, seed=seed,
+            min_per_class=1, verbose=False,
+        )
+        X_fs_va, y_fs_va = stratified_sample(
+            X_te, y_te, n=cfg.fs_test_rows, seed=seed,
+            min_per_class=1, verbose=False,
+        )
 
         fit_cfg = cfg
         if method == "bgwo_bi":

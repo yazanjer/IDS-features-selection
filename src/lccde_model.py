@@ -25,6 +25,7 @@ import warnings
 import numpy as np
 import pandas as pd
 from sklearn.metrics import f1_score
+from sklearn.preprocessing import LabelEncoder
 
 # Silence sklearn's per-row UserWarning "X does not have valid feature names,
 # but LGBMClassifier was fitted with feature names". LCCDE.evaluate() does
@@ -123,6 +124,12 @@ class LCCDE:
         self.leader_per_class: Dict[int, str] = {}
         self.base_f1: Dict[str, np.ndarray] = {}
         self.classes_: np.ndarray = np.array([])
+        # XGBoost 3.x rejects non-contiguous class labels (e.g. [0..8,10..12,14]
+        # — see DIAGNOSTIC_RUN_REDUCED.md §CRIT-2). We encode y to 0..k-1 for
+        # the XGB fit/predict path only; LightGBM / CatBoost tolerate the
+        # raw class IDs. predict_proba column order is preserved because
+        # LabelEncoder sorts unique classes, matching self.classes_.
+        self._xgb_le: Optional[LabelEncoder] = None
         self._train_time = 0.0
 
     # ------------------------------------------------------------------ #
@@ -182,7 +189,14 @@ class LCCDE:
             xgb_kwargs["device"] = "cuda"
         self.xgb_ = xgb.XGBClassifier(**xgb_kwargs)
         # XGB needs np arrays to avoid feature-name warnings on the predict path.
-        self.xgb_.fit(np.asarray(X_train), np.asarray(y_train))
+        # Encode y to contiguous 0..k-1 — XGBoost 3.x refuses non-contiguous
+        # class labels at fit time. LabelEncoder.classes_ is sorted, so the
+        # output of predict_proba ends up in the same column order as
+        # self.classes_ (also sorted) — no remap needed there. Only the
+        # discrete predict() outputs need inverse_transform.
+        self._xgb_le = LabelEncoder().fit(np.asarray(y_train))
+        y_train_xgb = self._xgb_le.transform(np.asarray(y_train))
+        self.xgb_.fit(np.asarray(X_train), y_train_xgb)
         print(f"[lccde]   XGBoost  done  ({time.time() - t_lgb:.1f}s, "
               f"{time.time() - t0:.1f}s total)", flush=True)
         t_xgb = time.time()
@@ -224,7 +238,9 @@ class LCCDE:
 
         # Per-class F1 of each base learner — defines the leader table.
         lg_p = self.lgbm.predict(X_val)
-        xg_p = self.xgb_.predict(np.asarray(X_val))
+        # XGBoost returns encoded 0..k-1 labels; decode back to real class IDs
+        # so the f1_score comparison against y_val is on the right scale.
+        xg_p = self._xgb_le.inverse_transform(self.xgb_.predict(np.asarray(X_val)))
         labels = list(self.classes_)
         self.base_f1 = {
             "lgbm": f1_score(y_val, lg_p, labels=labels, average=None, zero_division=0),
@@ -331,7 +347,9 @@ class LCCDE:
         if leader == "lgbm":
             return int(self.lgbm.predict(x)[0])
         if leader == "xgb":
-            return int(self.xgb_.predict(x)[0])
+            # Decode XGB's encoded 0..k-1 output back to the real class ID.
+            raw = int(self.xgb_.predict(x)[0])
+            return int(self._xgb_le.inverse_transform([raw])[0])
         # leader == "cat" — fall back to lgbm if CatBoost is disabled
         if self.cat is None:
             return int(self.lgbm.predict(x)[0])
