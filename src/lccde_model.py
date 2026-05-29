@@ -20,10 +20,24 @@ from typing import Dict, List, Optional, Tuple
 import gc
 import os
 import time
+import warnings
 
 import numpy as np
 import pandas as pd
 from sklearn.metrics import f1_score
+
+# Silence sklearn's per-row UserWarning "X does not have valid feature names,
+# but LGBMClassifier was fitted with feature names". LCCDE.evaluate() does
+# per-row leader predictions on numpy arrays (fit was on a DataFrame), so the
+# warning fires once per test row. At paper-grade budgets that's 100K+ warning
+# lines per BGWO seed — enough to overflow Colab's cell output buffer and get
+# the cell silently killed. Suppressed by exact message match so other sklearn
+# UserWarnings still surface.
+warnings.filterwarnings(
+    "ignore",
+    message="X does not have valid feature names",
+    category=UserWarning,
+)
 
 
 # ---------------------------------------------------------------------- #
