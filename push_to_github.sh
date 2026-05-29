@@ -10,10 +10,14 @@
 #   chmod +x push_to_github.sh
 #   ./push_to_github.sh
 #
-# When `git push` runs, it will prompt for credentials:
-#   Username: yazanjer
-#   Password: <paste your GitHub Personal Access Token here>
-#            (not your account password — GitHub disabled that years ago)
+# The script prompts you for a PAT silently (via `read -s`). The PAT is:
+#   - never written to disk
+#   - injected into the remote URL only for the duration of the push
+#   - scrubbed from the remote URL immediately afterward (and on Ctrl-C)
+# Git's own interactive credential prompts (Username/Password) are
+# disabled for the push via GIT_TERMINAL_PROMPT=0 + an empty
+# credential.helper, so a rejected PAT fails fast instead of silently
+# falling back to keychain-cached credentials.
 #
 # Generate a PAT at: https://github.com/settings/tokens
 #   - Classic token: tick `public_repo` scope.
@@ -149,16 +153,88 @@ else
 fi
 
 # ----------------------------------------------------------------------
-# 7. Push.
-#    Git will prompt for username + password (PAT) here.
-#    macOS Keychain may also offer to store the PAT — say no if you
-#    plan to revoke it after this push.
+# 7. Prompt for PAT (silently, no echo) and push.
+#    The PAT lives only in this shell process. It is:
+#      - read with `read -s` so it is never echoed to the terminal
+#      - read from /dev/tty so stdin redirection cannot break the prompt
+#      - never written to disk
+#      - injected into the remote URL only for the duration of the push
+#      - scrubbed from the remote URL immediately after (and on Ctrl-C
+#        via the EXIT trap below)
+#    Three guardrails prevent any fall-through to interactive prompts
+#    if the PAT is rejected:
+#      GIT_TERMINAL_PROMPT=0     — disable git's built-in Username/Password
+#      credential.helper=        — bypass macOS keychain / GCM / etc.
+#      GIT_ASKPASS=/usr/bin/false — any helper that still tries to ask gets
+#                                    a no-op binary
 # ----------------------------------------------------------------------
 echo
 echo "==> Pushing to $REPO_URL on branch $BRANCH"
-echo "    When prompted:"
-echo "      Username: yazanjer"
-git push -u origin "$BRANCH"
+echo "    Generate a PAT at https://github.com/settings/tokens"
+echo "    (Classic: public_repo scope.  Fine-grained: Contents=R/W, Metadata=R."
+echo "     Fine-grained tokens MUST be granted access to this repo at creation."
+echo "     7-day expiry is plenty — revoke after the push lands.)"
+echo
+
+# Scrub the auth URL on any exit path so a Ctrl-C between inject and push
+# can't leave the PAT in .git/config.
+scrub_remote() {
+    git remote set-url origin "$REPO_URL" 2>/dev/null || true
+}
+trap scrub_remote EXIT INT TERM
+
+read -s -p "GitHub PAT (input hidden): " PAT </dev/tty
+echo
+if [[ -z "$PAT" ]]; then
+    echo "ERROR: empty PAT — aborting."
+    exit 1
+fi
+# Strip any accidental whitespace / newline from paste.
+PAT="${PAT//[$'\t\r\n ']/}"
+
+# Sanity-check the PAT shape so we fail fast on an obvious mispaste.
+if [[ ! "$PAT" =~ ^(ghp_|github_pat_|gho_|ghs_|ghu_) ]]; then
+    echo "WARN: PAT doesn't start with a known GitHub token prefix"
+    echo "      (ghp_, github_pat_, gho_, ghs_, or ghu_)."
+    echo "      Proceeding anyway in case GitHub changed the format."
+fi
+
+# Build the authenticated URL transiently.
+AUTH_URL="https://yazanjer:${PAT}@github.com/yazanjer/IDS-features-selection.git"
+git remote set-url origin "$AUTH_URL"
+
+set +e
+GIT_TERMINAL_PROMPT=0 \
+GIT_ASKPASS=/usr/bin/false \
+git -c credential.helper= push -u origin "$BRANCH"
+PUSH_RC=$?
+set -e
+
+# Scrub the token from the remote URL. The EXIT trap also runs this —
+# the duplication is intentional belt-and-suspenders.
+scrub_remote
+unset PAT AUTH_URL
+trap - EXIT INT TERM
+
+if [[ $PUSH_RC -ne 0 ]]; then
+    echo
+    echo "ERROR: git push failed (rc=$PUSH_RC). The remote URL has been"
+    echo "       scrubbed of the PAT. Most common causes:"
+    echo "       - PAT is fine-grained but wasn't granted access to this repo"
+    echo "         (fine-grained tokens default to NO repos at creation)"
+    echo "       - PAT lacks Contents=R/W (fine-grained) or public_repo (classic)"
+    echo "       - PAT has expired or been revoked"
+    echo "       - Remote has commits you don't have locally — run:"
+    echo "           git pull --rebase origin main"
+    echo "       - Branch protection rules on main"
+    echo
+    echo "       Verify the PAT manually:"
+    echo '         read -s -p "PAT: " P && echo'
+    echo '         curl -sI -H "Authorization: Bearer $P" https://api.github.com/user | head -1'
+    echo '         unset P'
+    echo "       A working PAT returns 'HTTP/2 200'."
+    exit $PUSH_RC
+fi
 
 # ----------------------------------------------------------------------
 # 8. Verify.
@@ -170,5 +246,6 @@ git ls-remote origin "$BRANCH" || true
 echo
 echo "==> Done."
 echo "    Repo: https://github.com/yazanjer/IDS-features-selection"
-echo "    Don't forget to revoke the PAT now if it was a one-shot token:"
+echo "    The PAT was never written to disk and has been scrubbed from"
+echo "    the remote URL. If it was a one-shot token, revoke it now at:"
 echo "    https://github.com/settings/tokens"
