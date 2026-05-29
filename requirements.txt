@@ -26,9 +26,17 @@ joblib
 # Things Colab does NOT preinstall at the versions we need:
 lightgbm>=4.0
 xgboost>=2.0
-catboost>=1.2
 shap>=0.44
 lime>=0.2.0.1
 kaggle>=1.6
 kagglehub>=0.3
 river>=0.21
+
+# CatBoost is intentionally OPT-IN, not a default dep. shap.TreeExplainer
+# has a known heap-corruption bug on multi-class CatBoost trees (malloc
+# unaligned tcache abort) that kills the Colab kernel mid-BGWO loop with
+# no Python traceback. LCCDE runs as a clean 2-booster (LightGBM + XGBoost)
+# leader-confidence ensemble by default. To restore the original 3-booster
+# LCCDE for paper-reproduction runs, uncomment the line below and set
+# the env var ENABLE_CATBOOST=1 before importing src.lccde_model.
+# catboost>=1.2

@@ -157,7 +157,11 @@ def _explanation_consistency(
                       random_state=0)
 
     importances: List[np.ndarray] = []
-    for booster in (model.lgbm, model.xgb_, model.cat):
+    # In 2-booster mode (ENABLE_CATBOOST not set) model.cat is None — skip.
+    boosters = [model.lgbm, model.xgb_]
+    if getattr(model, "cat", None) is not None:
+        boosters.append(model.cat)
+    for booster in boosters:
         try:
             explainer = shap.TreeExplainer(
                 booster, data=bg, feature_perturbation="interventional"

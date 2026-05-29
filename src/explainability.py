@@ -69,9 +69,13 @@ def compute_shap_signatures(
     n_features = X_sample.shape[1]
     feature_names = list(X_sample.columns)
 
-    # Pre-explain each base learner once.
+    # Pre-explain each base learner once. CatBoost slot may be None in
+    # 2-booster mode (ENABLE_CATBOOST not set) — skip it cleanly.
+    base_learners = [("lgbm", model.lgbm), ("xgb", model.xgb_)]
+    if getattr(model, "cat", None) is not None:
+        base_learners.append(("cat", model.cat))
     explanations: Dict[str, np.ndarray] = {}
-    for tag, booster in (("lgbm", model.lgbm), ("xgb", model.xgb_), ("cat", model.cat)):
+    for tag, booster in base_learners:
         try:
             ex = shap.TreeExplainer(booster, data=bg,
                                     feature_perturbation="interventional")
@@ -192,7 +196,10 @@ def explanation_fidelity(
         order = np.argsort(imp)[::-1][:top_k]
 
         leader = model.leader_per_class.get(cls, "lgbm")
-        booster = {"lgbm": model.lgbm, "xgb": model.xgb_, "cat": model.cat}[leader]
+        # In 2-booster mode model.cat is None — fall back to lgbm rather
+        # than crashing if the leader table still names "cat".
+        cat_or_lgbm = model.cat if getattr(model, "cat", None) is not None else model.lgbm
+        booster = {"lgbm": model.lgbm, "xgb": model.xgb_, "cat": cat_or_lgbm}[leader]
         x0 = sample.iloc[[i]].copy()
         p0 = booster.predict_proba(np.asarray(x0) if leader == "xgb" else x0)
         c0 = float(p0[0, list(model.classes_).index(cls)])

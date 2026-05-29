@@ -16,8 +16,16 @@ performance is attributable to the feature-selection stage alone.
 |----------------------|-------------------------------------|-------------------------------------------|
 | Feature selection    | Information-gain / FCBF filter      | **Binary Grey Wolf Optimizer (BGWO)**     |
 | FS objective         | Univariate relevance only           | **Tri-objective: F1 + sparsity + SHAP coherence** |
-| Downstream model     | LCCDE (XGBoost + LightGBM + CatBoost) | LCCDE (unchanged)                       |
+| Downstream model     | LCCDE (XGBoost + LightGBM + CatBoost) | LCCDE (LightGBM + XGBoost by default; CatBoost opt-in via `ENABLE_CATBOOST=1`) |
 | Explainability       | None / post-hoc                     | SHAP **inside** the FS loop + per-class signatures |
+
+> **Why 2-booster by default?** `shap.TreeExplainer` has a documented
+> heap-corruption bug on multi-class CatBoost trees (`malloc(): unaligned
+> tcache chunk detected` — a C-level abort, not catchable from Python)
+> that kills the runtime mid-BGWO loop on Colab with no traceback. We
+> default to a clean LightGBM + XGBoost leader-confidence ensemble so the
+> SHAP-in-the-loop contribution stays operational. The original 3-booster
+> LCCDE is one env var away for reproducibility runs.
 
 ## The two contributions
 
@@ -187,8 +195,9 @@ BGWO tri-objective → metrics → plots on a tiny configuration
 | `bgwo_shap`|   0.854  |   0.997  |       43 / 77 |             0.023 |    0.015 |
 
 These numbers are **not** the paper-grade headline numbers — the smoke
-config trains on 1.2K rows with BGWO pop=3 / iter=2 and ran in a
-two-booster (LightGBM + XGBoost) sandbox mode because CatBoost was not
+config trains on 1.2K rows with BGWO pop=3 / iter=2 and ran in
+two-booster (LightGBM + XGBoost) mode, which is now the default; the
+historical snapshot below predates that change. CatBoost was not
 installable inside the timeout budget. Production runs in Colab use
 the full three-booster LCCDE and the defaults in the table above.
 

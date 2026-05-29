@@ -45,6 +45,28 @@ warnings.filterwarnings(
 # Doesn't import torch / pycuda — just checks env + nvidia-smi.
 # Set FORCE_CPU=1 to disable the GPU path (useful for benchmarking).
 # ---------------------------------------------------------------------- #
+def _use_catboost() -> bool:
+    """Return True iff CatBoost should be the third LCCDE base learner.
+
+    Default: False. CatBoost is opt-in via ENABLE_CATBOOST=1 because
+    shap.TreeExplainer has a known heap-corruption bug on multi-class
+    CatBoost trees (malloc unaligned tcache abort), which kills the
+    Colab kernel mid-BGWO loop with no Python traceback. Disabled by
+    default; LCCDE then runs as a 2-booster LightGBM+XGBoost
+    leader-confidence ensemble.
+
+    Set ENABLE_CATBOOST=1 to opt back in (e.g. for paper-reproduction
+    runs against Yang et al.'s original 3-booster LCCDE).
+    """
+    if not os.environ.get("ENABLE_CATBOOST"):
+        return False
+    try:
+        import catboost  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def _cuda_available() -> bool:
     import os, shutil, subprocess
     if os.environ.get("FORCE_CPU"):
@@ -109,12 +131,11 @@ class LCCDE:
     def fit(self, X_train, y_train, X_val=None, y_val=None) -> "LCCDE":
         import lightgbm as lgb
         import xgboost as xgb
-        try:
+        _have_cat = _use_catboost()
+        if _have_cat:
             import catboost as cbt
-            _have_cat = True
-        except ImportError:
+        else:
             cbt = None
-            _have_cat = False
 
         if X_val is None or y_val is None:
             X_val, y_val = X_train, y_train
@@ -186,11 +207,13 @@ class LCCDE:
             print(f"[lccde]   CatBoost done  ({time.time() - t_xgb:.1f}s, "
                   f"{time.time() - t0:.1f}s total)", flush=True)
         else:
-            # Graceful 2-booster degenerate mode (sandbox / lightweight envs).
-            # In production (Colab + full deps) this branch is never taken.
-            self.cat = self.lgbm
-            print("[lccde] catboost not installed — running 2-booster mode "
-                  "(cat slot mirrors lgbm). Numbers will not match the paper.")
+            # First-class 2-booster mode (CatBoost disabled by default).
+            # LCCDE decision rule in predict() handles self.cat is None as
+            # a clean LightGBM+XGBoost leader-confidence ensemble — no
+            # mirroring, no biased voting.
+            self.cat = None
+            print("[lccde] 2-booster mode (LightGBM + XGBoost). "
+                  "Set ENABLE_CATBOOST=1 to enable the original 3-booster LCCDE.")
 
         # Release intermediate fit-time state and trigger collection.
         # Big multi-class boosters keep substantial scratch around until
@@ -202,21 +225,17 @@ class LCCDE:
         # Per-class F1 of each base learner — defines the leader table.
         lg_p = self.lgbm.predict(X_val)
         xg_p = self.xgb_.predict(np.asarray(X_val))
-        if _have_cat:
-            cb_p = self.cat.predict(X_val).ravel().astype(int)
-        else:
-            cb_p = lg_p   # mirrored
-
         labels = list(self.classes_)
         self.base_f1 = {
             "lgbm": f1_score(y_val, lg_p, labels=labels, average=None, zero_division=0),
             "xgb":  f1_score(y_val, xg_p, labels=labels, average=None, zero_division=0),
-            "cat":  f1_score(y_val, cb_p, labels=labels, average=None, zero_division=0),
         }
+        if _have_cat:
+            cb_p = self.cat.predict(X_val).ravel().astype(int)
+            self.base_f1["cat"] = f1_score(y_val, cb_p, labels=labels,
+                                           average=None, zero_division=0)
         for i, cls in enumerate(labels):
-            scores = {"lgbm": self.base_f1["lgbm"][i],
-                      "xgb":  self.base_f1["xgb"][i],
-                      "cat":  self.base_f1["cat"][i]}
+            scores = {tag: self.base_f1[tag][i] for tag in self.base_f1}
             self.leader_per_class[int(cls)] = max(scores, key=scores.get)
         return self
 
@@ -229,20 +248,40 @@ class LCCDE:
 
         p1 = self.lgbm.predict_proba(X_test)         # (n, C)
         p2 = self.xgb_.predict_proba(Xnp)
-        p3 = self.cat.predict_proba(X_test)
 
-        # Align class index order — assume identical, as we trained on the
-        # same y; if not, project onto self.classes_.
         y1 = self.classes_[np.argmax(p1, axis=1)]
         y2 = self.classes_[np.argmax(p2, axis=1)]
-        y3 = self.classes_[np.argmax(p3, axis=1)]
-
         c1 = p1.max(axis=1)
         c2 = p2.max(axis=1)
-        c3 = p3.max(axis=1)
-
         n = len(Xnp)
         y_pred = np.empty(n, dtype=int)
+
+        # ----- 2-booster mode: LightGBM + XGBoost only ----- #
+        if self.cat is None:
+            agree = (y1 == y2)
+            y_pred[agree] = y1[agree]
+            if (~agree).any():
+                for k in np.where(~agree)[0]:
+                    # For each disagreed sample, defer to the per-class leader
+                    # of whichever class has the higher leader score; fall back
+                    # to higher-confidence model if neither class's leader is
+                    # one of the two predicting models.
+                    leader1 = self.leader_per_class.get(int(y1[k]))
+                    leader2 = self.leader_per_class.get(int(y2[k]))
+                    if leader1 == "lgbm" and leader2 != "xgb":
+                        y_pred[k] = y1[k]
+                    elif leader2 == "xgb" and leader1 != "lgbm":
+                        y_pred[k] = y2[k]
+                    else:
+                        # Either both class leaders are the same model, or
+                        # neither — break tie on raw confidence.
+                        y_pred[k] = y1[k] if c1[k] >= c2[k] else y2[k]
+            return y_pred, time.time() - t0
+
+        # ----- 3-booster mode: LightGBM + XGBoost + CatBoost ----- #
+        p3 = self.cat.predict_proba(X_test)
+        y3 = self.classes_[np.argmax(p3, axis=1)]
+        c3 = p3.max(axis=1)
 
         all_agree = (y1 == y2) & (y2 == y3)
         all_diff  = (y1 != y2) & (y2 != y3) & (y1 != y3)
@@ -293,6 +332,9 @@ class LCCDE:
             return int(self.lgbm.predict(x)[0])
         if leader == "xgb":
             return int(self.xgb_.predict(x)[0])
+        # leader == "cat" — fall back to lgbm if CatBoost is disabled
+        if self.cat is None:
+            return int(self.lgbm.predict(x)[0])
         out = np.asarray(self.cat.predict(x)).ravel()
         return int(out[0])
 
